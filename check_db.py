@@ -1,8 +1,10 @@
 """
 Quick database check script - shows schema and sample rows for each table
+Also shows data freshness and quality metrics
 """
 
 from app.models import get_db, Contractor, Certification, ContractorText
+from app.storage import ContractorStorage
 from sqlalchemy import inspect
 
 def print_schema_and_sample(table_class, table_name):
@@ -60,6 +62,29 @@ def main():
     print_schema_and_sample(Contractor, "contractors")
     print_schema_and_sample(Certification, "certifications")
     print_schema_and_sample(ContractorText, "contractor_text")
+    
+    # Data Quality & Freshness Report
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        storage = ContractorStorage(db)
+        report = storage.get_freshness_report()
+        stale_30d = len(storage.get_stale_contractors(days_old=30))
+        
+        print("=" * 80)
+        print("DATA QUALITY & FRESHNESS REPORT")
+        print("=" * 80)
+        print(f"Total Contractors:              {report['total']}")
+        print(f"Fresh (last 7 days):            {report['fresh_7d']}")
+        print(f"Fresh (last 30 days):           {report['fresh_30d']}")
+        print(f"Fresh (last 90 days):           {report['fresh_90d']}")
+        print(f"Stale (30+ days old):           {stale_30d}")
+        print(f"Freshness Rate (30d):           {report['freshness_rate_30d']:.1f}%")
+        print()
+        print("Note: Data freshness is tracked via 'last_scraped_at' field")
+        print("      Use get_stale_contractors() to identify records needing re-scrape")
+    finally:
+        db.close()
     
     print("=" * 80)
     print("CHECK COMPLETE")

@@ -1,6 +1,7 @@
 """Storage operations for contractor data in SQLite"""
 
 from typing import Dict, List, Optional
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -9,7 +10,20 @@ from app.etl import ETLProcessor
 
 
 class ContractorStorage:
-    """Handles storage operations for contractor data"""
+    """
+    Storage operations for contractor data in SQLite
+    
+    Handles CRUD operations and data quality management:
+    - Upsert logic for idempotent re-scraping (keys on external_contractor_id)
+    - Data freshness tracking via last_scraped_at field
+    - Data confidence scoring based on completeness
+    
+    Data Quality & Relevance Over Time:
+    - last_scraped_at: Auto-updates on every save/update to track freshness
+    - get_stale_contractors(): Identifies contractors needing re-scraping
+    - get_freshness_report(): Provides metrics on data freshness
+    - For production: Add scheduled jobs (e.g., Celery) to re-scrape stale records
+    """
     
     def __init__(self, db_session: Session):
         """
@@ -218,4 +232,70 @@ class ContractorStorage:
     def count_contractors(self) -> int:
         """Get total count of contractors"""
         return self.db.query(Contractor).count()
+    
+    def get_stale_contractors(self, days_old: int = 30) -> List[Contractor]:
+        """
+        Get contractors that haven't been scraped in X days (stale data)
+        
+        This enables re-scraping of outdated records to maintain data freshness.
+        
+        Args:
+            days_old: Number of days since last scrape to consider stale (default: 30)
+            
+        Returns:
+            List of Contractor objects that are stale
+        """
+        cutoff = datetime.now() - timedelta(days=days_old)
+        return self.db.query(Contractor).filter(
+            Contractor.last_scraped_at < cutoff
+        ).all()
+    
+    def get_freshness_report(self) -> Dict[str, any]:
+        """
+        Get summary report of data freshness
+        
+        Returns metrics about how fresh the contractor data is, which helps
+        monitor data quality and relevance over time.
+        
+        Returns:
+            Dictionary with freshness metrics
+        """
+        now = datetime.now()
+        total = self.db.query(Contractor).count()
+        
+        if total == 0:
+            return {
+                "total": 0,
+                "fresh_7d": 0,
+                "fresh_30d": 0,
+                "fresh_90d": 0,
+                "stale_30d": 0,
+                "stale_90d": 0,
+                "freshness_rate_30d": 0.0
+            }
+        
+        fresh_7d = self.db.query(Contractor).filter(
+            Contractor.last_scraped_at > now - timedelta(days=7)
+        ).count()
+        
+        fresh_30d = self.db.query(Contractor).filter(
+            Contractor.last_scraped_at > now - timedelta(days=30)
+        ).count()
+        
+        fresh_90d = self.db.query(Contractor).filter(
+            Contractor.last_scraped_at > now - timedelta(days=90)
+        ).count()
+        
+        stale_30d = total - fresh_30d
+        stale_90d = total - fresh_90d
+        
+        return {
+            "total": total,
+            "fresh_7d": fresh_7d,
+            "fresh_30d": fresh_30d,
+            "fresh_90d": fresh_90d,
+            "stale_30d": stale_30d,
+            "stale_90d": stale_90d,
+            "freshness_rate_30d": (fresh_30d / total * 100) if total > 0 else 0.0
+        }
 
